@@ -34,7 +34,8 @@ select a.[Account Name], m.CurrentDate,
   from Account a
     cross join (${monthSql}) m
     left join Transactions t on a.[Account Name] = t.[Account Name] and t.Date < m.NextDate
-  where exists (select *
+  where a.Type = 'Cash'
+    and exists (select *
                   from Transactions x
                   where x.[Account Name] = a.[Account Name]
                     and x.Date >= cast('${start.getFullYear()}-${start.getMonth() + 1}-${start.getDate()}' as date))
