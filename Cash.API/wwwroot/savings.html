@@ -1,0 +1,129 @@
+﻿<html>
+<head>
+    <title>Savings Dashboard</title>
+</head>
+<body>
+<div id="savingsChart" style="width: 100%; height: 100%;"></div>
+
+<script src="https://code.jquery.com/jquery-3.3.1.min.js" integrity="sha256-FgpCb/KJQlLNfOu91ta32o/NMZxltwRo8QtmkMRdAu8=" crossorigin="anonymous"></script>
+<script src="https://code.highcharts.com/highcharts.js"></script>
+<script>
+    jQuery(function($) {
+        const now = new Date();
+        const start = new Date(now.getFullYear() - 1, now.getMonth(), 1);
+        const months = [];
+
+        let currentMonth = start;
+        let nextMonth = new Date(currentMonth);
+        nextMonth.setMonth(nextMonth.getMonth() + 1);
+        while (currentMonth < new Date()) {
+            months.push({ current: currentMonth, next: nextMonth });
+            currentMonth = nextMonth;
+            nextMonth = new Date(currentMonth);
+            nextMonth.setMonth(nextMonth.getMonth() + 1);
+        }
+
+        const monthSql = months
+            .map(m => `select cast('${m.current.getFullYear()}-${m.current.getMonth() + 1
+                }-1' as date) as CurrentDate, cast('${m.next.getFullYear()}-${m.next.getMonth() + 1
+                }-1' as date) as NextDate`).join(" union all ");
+
+        const query = `
+select a.[Account Name], m.CurrentDate,
+       a.OpeningBalance + coalesce(sum(case [Transaction Type] when 'debit' then -1 else 1 end * t.[Amount]), 0) as EndingBalance
+  from Account a
+    cross join (${monthSql}) m
+    left join Transactions t on a.[Account Name] = t.[Account Name] and t.Date < m.NextDate
+  where exists (select *
+                  from Transactions x
+                  where x.[Account Name] = a.[Account Name]
+                    and x.Date >= cast('${start.getFullYear()}-${start.getMonth() + 1}-${start.getDate()}' as date))
+  group by a.[Account Name], m.CurrentDate, a.OpeningBalance
+  order by 1, 2
+`;
+
+        $.ajax({
+                type: "POST",
+                url: "/api/query",
+                data: JSON.stringify({ query: query }),
+                dataType: "json",
+                contentType: "application/json"
+            }).done(result => {
+                const series = {};
+                for (let i = 0; i < result.data.length; i++) {
+                    const accountName = result.data[i][0];
+                    const endingBalance = parseFloat(result.data[i][2]);
+
+                    if (typeof series[accountName] === "undefined") {
+                        series[accountName] = {
+                            name: accountName,
+                            data: []
+                        };
+                    }
+
+                    series[accountName].data.push(endingBalance);
+                }
+
+                const currencyFormatterNoDecimals = new Intl.NumberFormat("en-US",
+                    {
+                        style: "currency",
+                        currency: "USD",
+                        minimumFractionDigits: 0,
+                        maximumFractionDigits: 0
+                    });
+
+                const currencyFormatter = new Intl.NumberFormat("en-US",
+                    {
+                        style: "currency",
+                        currency: "USD"
+                    });
+
+                const dateFormatter = new Intl.DateTimeFormat("en-US",
+                    {
+                        month: "long",
+                        year: "numeric"
+                    });
+
+                Highcharts.chart("savingsChart",
+                    {
+                        chart: { type: "area" },
+                        title: { text: "Savings Previous 12 months" },
+                        subtitle: { text: dateFormatter.format(start) + " - Present" },
+                        xAxis: {
+                            categories: months.map(m => dateFormatter.format(m.current)),
+                            tickmarkPlacement: "on",
+                            title: { enabled: false }
+                        },
+                        yAxis: {
+                            labels: {
+                                formatter: function() { return currencyFormatterNoDecimals.format(this.value); }
+                            },
+                            stackLabels: {
+                                enabled: true,
+                                formatter: function() { return currencyFormatter.format(this.total); }
+                            },
+                            title: { enabled: false }
+                        },
+                        plotOptions: {
+                            area: { stacking: "normal" }
+                        },
+                        tooltip: {
+                            pointFormatter: function() {
+                                return `<span style="color:${this.color}">●</span> ${this.series.name}: <b>${
+                                    currencyFormatter.format(this.y)}</b><br/>.`;
+                            }
+                        },
+                        series: Object.values(series)
+                    });
+            })
+            .fail((jq, textStatus, errorThrown) => {
+                if (jq.responseJSON && jq.responseJSON.message) {
+                    alert(`Error: ${jq.responseJSON.message}`);
+                } else {
+                    alert(`Error: ${errorThrown}`);
+                }
+            });
+    });
+</script>
+</body>
+</html>
